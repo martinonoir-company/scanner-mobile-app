@@ -143,7 +143,7 @@ export default function HomeScreen() {
             description="Receive a supplier delivery."
             icon="cube"
             variant="primary"
-            onPress={() => notReadyYet('Restock / Receive')}
+            onPress={() => router.push('/restock/batch')}
           />
         </View>
 
@@ -155,7 +155,7 @@ export default function HomeScreen() {
             description="Damaged or returned items"
             icon="arrow-undo"
             variant="secondary"
-            onPress={() => notReadyYet('Returns')}
+            onPress={() => router.push('/returns/batch')}
           />
           <ActionCard
             title="Dispatch"

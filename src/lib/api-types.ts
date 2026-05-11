@@ -105,3 +105,46 @@ export interface StockLevel {
   reserved: number;
   available: number;
 }
+
+// ── Inventory movements (batch — PR #5 server endpoint) ──
+
+/**
+ * Stock movement kinds. The scanner only ever emits three:
+ *   RECEIPT     — supplier restock (inbound, adds stock)
+ *   RETURN      — customer return in good condition (inbound, adds stock)
+ *   ADJUSTMENT  — damage / spoilage write-off (outbound, removes stock)
+ * The other kinds (SALE, RESERVATION, RELEASE, TRANSFER_*) are emitted
+ * server-side by the order/checkout pipelines, never by the scanner.
+ */
+export type MovementKind =
+  | 'RECEIPT'
+  | 'SALE'
+  | 'RESERVATION'
+  | 'RELEASE'
+  | 'RETURN'
+  | 'ADJUSTMENT'
+  | 'TRANSFER_OUT'
+  | 'TRANSFER_IN';
+
+export interface MovementBatchLine {
+  clientLineId: string;
+  variantId: string;
+  kind: MovementKind;
+  quantity: number;
+  warehouseCode?: string;
+  referenceId?: string;
+  referenceType?: string;
+  reason?: string;
+}
+
+export interface MovementBatchLineResult {
+  clientLineId: string;
+  status: 'ACCEPTED' | 'DEDUPLICATED';
+  movementId: string;
+}
+
+export interface MovementBatchResult {
+  accepted: number;
+  deduplicated: number;
+  lines: MovementBatchLineResult[];
+}

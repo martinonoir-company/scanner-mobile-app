@@ -17,6 +17,8 @@ import {
   ApiError,
   AuthResponse,
   Branch,
+  MovementBatchLine,
+  MovementBatchResult,
   StockLevel,
   StockLevelRaw,
   Terminal,
@@ -226,6 +228,27 @@ class ApiClient {
       reserved: raw.reserved,
       available: raw.onHand - raw.reserved,
     };
+  }
+
+  // ── Inventory movements (batch — restock / returns) ──
+
+  /**
+   * Submit a batch of stock movements in ONE server-side transaction:
+   * all lines succeed or all roll back. Per-line idempotency via the
+   * `clientLineId` UUID — resubmitting the same batch returns those
+   * lines as DEDUPLICATED with no extra stock change.
+   *
+   * Throws an ApiError on a 4xx (e.g. 409 when an ADJUSTMENT line would
+   * drive a variant below zero — the whole batch is rejected).
+   */
+  async recordMovementsBatch(lines: MovementBatchLine[]) {
+    return this.request<{ data: MovementBatchResult }>(
+      '/inventory/movements/batch',
+      {
+        method: 'POST',
+        body: JSON.stringify({ lines }),
+      },
+    );
   }
 }
 
