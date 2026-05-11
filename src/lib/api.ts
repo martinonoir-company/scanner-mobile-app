@@ -19,6 +19,7 @@ import {
   Branch,
   MovementBatchLine,
   MovementBatchResult,
+  PosSession,
   StockLevel,
   StockLevelRaw,
   Terminal,
@@ -248,6 +249,83 @@ class ApiClient {
         method: 'POST',
         body: JSON.stringify({ lines }),
       },
+    );
+  }
+
+  // ── POS sessions (checkout — item capture only) ──
+  //
+  // The scanner is an item-capture device: it opens a session, adds/edits
+  // items, and flips it to AWAITING_PAYMENT ("ready for payment"). It does
+  // NOT call confirm — payment + completion happen on the POS web app.
+  // Every mutation carries the optimistic-concurrency `version`; a stale
+  // version returns 409 SESSION_VERSION_CONFLICT with the current value.
+
+  /** Open (or join) the session on a terminal. Idempotent. */
+  async openPosSession(terminalCode: string, currency?: 'NGN' | 'USD') {
+    return this.request<{ data: PosSession }>(
+      `/pos-sessions/${encodeURIComponent(terminalCode)}/open`,
+      {
+        method: 'POST',
+        body: JSON.stringify(currency ? { currency } : {}),
+      },
+    );
+  }
+
+  /** Fetch the current open session for a terminal (404 if none). */
+  async getPosSession(terminalCode: string) {
+    return this.request<{ data: PosSession }>(
+      `/pos-sessions/${encodeURIComponent(terminalCode)}`,
+    );
+  }
+
+  /** Add a scanned line. `clientLineId` is the idempotency key. */
+  async addPosSessionItem(
+    terminalCode: string,
+    body: {
+      clientLineId: string;
+      variantId: string;
+      quantity: number;
+      version: number;
+    },
+  ) {
+    return this.request<{ data: PosSession }>(
+      `/pos-sessions/${encodeURIComponent(terminalCode)}/items`,
+      { method: 'POST', body: JSON.stringify(body) },
+    );
+  }
+
+  /** Update a line's quantity (0 removes it). */
+  async updatePosSessionItem(
+    terminalCode: string,
+    lineId: string,
+    body: { quantity: number; version: number },
+  ) {
+    return this.request<{ data: PosSession }>(
+      `/pos-sessions/${encodeURIComponent(terminalCode)}/items/${encodeURIComponent(lineId)}`,
+      { method: 'PATCH', body: JSON.stringify(body) },
+    );
+  }
+
+  /** Snapshot totals and flip the session to AWAITING_PAYMENT. */
+  async posSessionPaymentIntent(
+    terminalCode: string,
+    body: { version: number },
+  ) {
+    return this.request<{ data: PosSession }>(
+      `/pos-sessions/${encodeURIComponent(terminalCode)}/payment-intent`,
+      { method: 'POST', body: JSON.stringify(body) },
+    );
+  }
+
+  /** Cancel the basket. Allowed while ACTIVE; the cashier handles voids
+   *  once it's AWAITING_PAYMENT (the scanner hides the button by then). */
+  async voidPosSession(
+    terminalCode: string,
+    body: { version: number; reason?: string },
+  ) {
+    return this.request<{ data: PosSession }>(
+      `/pos-sessions/${encodeURIComponent(terminalCode)}/void`,
+      { method: 'POST', body: JSON.stringify(body) },
     );
   }
 }

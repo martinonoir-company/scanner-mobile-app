@@ -133,10 +133,10 @@ export default function HomeScreen() {
         <View style={styles.primaryRow}>
           <ActionCard
             title="POS Checkout"
-            description="Scan items into the active POS terminal."
+            description="Scan items, then hand the basket to the till."
             icon="cart"
             variant="primary"
-            onPress={() => notReadyYet('POS Checkout')}
+            onPress={() => router.push('/checkout')}
           />
           <ActionCard
             title="Restock / Receive"

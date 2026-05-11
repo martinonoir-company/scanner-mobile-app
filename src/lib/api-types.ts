@@ -148,3 +148,58 @@ export interface MovementBatchResult {
   deduplicated: number;
   lines: MovementBatchLineResult[];
 }
+
+// ── POS sessions (PR #11 server endpoints) ──
+
+export type PosSessionStatus =
+  | 'ACTIVE'
+  | 'AWAITING_PAYMENT'
+  | 'COMPLETED'
+  | 'VOIDED';
+
+/** One line in the live POS-session cart. Prices are MINOR units. */
+export interface PosSessionLine {
+  clientLineId: string;
+  variantId: string;
+  productId: string;
+  productName: string;
+  variantName: string | null;
+  sku: string;
+  barcode: string | null;
+  unitPrice: number;
+  quantity: number;
+  imageUrl: string | null;
+  options: Record<string, string> | null;
+  maxStock: number;
+  scannedByStaffId: string;
+  scannedAt: string;
+}
+
+export interface PosSessionCart {
+  items: PosSessionLine[];
+  currency: 'NGN' | 'USD';
+  totals: {
+    subtotal: number;
+    discountTotal: number;
+    grandTotal: number;
+  };
+  couponCode?: string | null;
+  discountAmount?: number;
+  discountType?: 'COUPON' | 'MANUAL' | null;
+}
+
+export interface PosSession {
+  id: string;
+  terminalId: string;
+  branchId: string;
+  openedByStaffId: string;
+  status: PosSessionStatus;
+  cart: PosSessionCart;
+  version: number;
+  openedAt: string;
+  closedAt?: string | null;
+  resultOrderId?: string | null;
+  resultOrderNumber?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}

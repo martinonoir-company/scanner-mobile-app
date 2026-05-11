@@ -62,6 +62,7 @@ export default function RootLayout() {
                 <Stack.Screen name="lookup" options={{ headerShown: false }} />
                 <Stack.Screen name="restock" options={{ headerShown: false }} />
                 <Stack.Screen name="returns" options={{ headerShown: false }} />
+                <Stack.Screen name="checkout" options={{ headerShown: false }} />
               </Stack>
             </SplashGate>
           </BranchProvider>
