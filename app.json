@@ -1,0 +1,53 @@
+{
+  "expo": {
+    "name": "Martino Noir Scanner",
+    "slug": "martinonoir-scanner",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/expo/splash-icon.png",
+    "scheme": "martinonoir-scanner",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": false,
+    "platforms": ["ios", "android"],
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.martinonoir.scanner",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Used to scan product barcodes and QR codes for POS checkout, restocking, returns, and dispatch."
+      }
+    },
+    "android": {
+      "package": "com.martinonoir.scanner",
+      "permissions": ["CAMERA"],
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "category": ["DEFAULT", "BROWSABLE"],
+          "data": [{ "scheme": "martinonoir-scanner" }]
+        }
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-font",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/expo/splash-icon.png",
+          "imageWidth": 200,
+          "backgroundColor": "#0A0A0A",
+          "resizeMode": "contain"
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "apiUrl": "https://api.martinonoir.com/api/v1",
+      "wsUrl": "wss://api.martinonoir.com/pos"
+    }
+  }
+}
