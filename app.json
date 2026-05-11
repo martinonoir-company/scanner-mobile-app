@@ -33,6 +33,12 @@
       "expo-secure-store",
       "expo-font",
       [
+        "expo-camera",
+        {
+          "cameraPermission": "Used to scan product barcodes and QR codes for POS checkout, restocking, returns, and dispatch."
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "image": "./assets/expo/splash-icon.png",

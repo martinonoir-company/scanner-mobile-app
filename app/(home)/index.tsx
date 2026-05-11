@@ -171,7 +171,7 @@ export default function HomeScreen() {
             description="Price & stock check"
             icon="search"
             variant="secondary"
-            onPress={() => notReadyYet('Lookup')}
+            onPress={() => router.push('/lookup/scan')}
           />
           {/* Single card on its own line keeps the grid tidy. */}
           <View style={{ flex: 1 }} />

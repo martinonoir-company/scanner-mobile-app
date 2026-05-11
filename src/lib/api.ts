@@ -17,7 +17,10 @@ import {
   ApiError,
   AuthResponse,
   Branch,
+  StockLevel,
+  StockLevelRaw,
   Terminal,
+  VariantLookup,
 } from './api-types';
 
 const API_BASE =
@@ -165,6 +168,64 @@ class ApiClient {
 
   async listTerminals(branchId: string) {
     return this.request<{ data: Terminal[] }>(`/branches/${branchId}/terminals`);
+  }
+
+  // ── Variant lookup (scanner) ──
+
+  /**
+   * Resolve a scanned barcode to a variant. Throws an ApiError with
+   * statusCode 404 when no active variant matches.
+   */
+  async lookupVariantByBarcode(code: string) {
+    const encoded = encodeURIComponent(code);
+    return this.request<{ data: VariantLookup }>(
+      `/products/variants/by-barcode/${encoded}`,
+    );
+  }
+
+  /** Resolve a SKU to a variant. 404 when no active variant matches. */
+  async lookupVariantBySku(code: string) {
+    const encoded = encodeURIComponent(code);
+    return this.request<{ data: VariantLookup }>(
+      `/products/variants/by-sku/${encoded}`,
+    );
+  }
+
+  // ── Stock levels ──
+
+  /**
+   * Current stock for a variant at a warehouse. Returns a normalised
+   * StockLevel (available computed client-side). If the server returns
+   * null (no stock-level row), this resolves to a zeroed StockLevel so
+   * callers never have to null-check.
+   */
+  async getStockLevel(
+    variantId: string,
+    warehouseCode?: string,
+  ): Promise<StockLevel> {
+    const qs = warehouseCode
+      ? `?warehouse=${encodeURIComponent(warehouseCode)}`
+      : '';
+    const res = await this.request<{ data: StockLevelRaw | null }>(
+      `/inventory/levels/${encodeURIComponent(variantId)}${qs}`,
+    );
+    const raw = res.data;
+    if (!raw) {
+      return {
+        variantId,
+        warehouseCode: warehouseCode ?? 'DEFAULT',
+        onHand: 0,
+        reserved: 0,
+        available: 0,
+      };
+    }
+    return {
+      variantId: raw.variantId,
+      warehouseCode: raw.warehouseCode,
+      onHand: raw.onHand,
+      reserved: raw.reserved,
+      available: raw.onHand - raw.reserved,
+    };
   }
 }
 

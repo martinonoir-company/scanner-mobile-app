@@ -59,6 +59,7 @@ export default function RootLayout() {
                     headerBackVisible: false,
                   }}
                 />
+                <Stack.Screen name="lookup" options={{ headerShown: false }} />
               </Stack>
             </SplashGate>
           </BranchProvider>
