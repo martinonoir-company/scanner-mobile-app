@@ -10,16 +10,18 @@ export interface ApiError {
   correlationId?: string;
 }
 
+/**
+ * Response shape of POST /auth/login and /auth/refresh.
+ *
+ * The server returns ONLY the token pair — there is no `user` object.
+ * The user identity (id, email, role) is encoded in the JWT payload;
+ * decode the access token to read it (see tokenToUser in auth-context).
+ */
 export interface AuthResponse {
   accessToken: string;
   refreshToken: string;
-  user: {
-    id: string;
-    email: string;
-    role: 'SUPER_ADMIN' | 'COMPANY_SUPER_ADMIN' | 'COMPANY_STAFF' | 'CUSTOMER';
-    firstName?: string;
-    lastName?: string;
-  };
+  /** Access-token lifetime in seconds. */
+  expiresIn?: number;
 }
 
 // ── Branches ──

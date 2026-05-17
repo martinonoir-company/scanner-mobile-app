@@ -20,7 +20,6 @@ import React, {
   useState,
 } from 'react';
 import { api } from './api';
-import { AuthResponse } from './api-types';
 import { tokenStore } from './token-store';
 
 export type StaffRole = 'SUPER_ADMIN' | 'COMPANY_SUPER_ADMIN' | 'COMPANY_STAFF';
@@ -198,19 +197,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const login = useCallback(
     async (email: string, password: string) => {
       const result = await api.login(email, password);
-      const data: AuthResponse = result.data;
+      const data = result.data;
+
+      // The /auth/login response is only { accessToken, refreshToken } —
+      // the user identity (id, email, role) lives inside the JWT, not as
+      // a separate `user` object. Decode the role from the access token.
+      const decoded = tokenToUser(data.accessToken);
 
       // Role check: refuse customer accounts up front (server also refuses
       // to grant scanner-side permissions, but failing fast here gives a
-      // clear message).
-      if (!ALLOWED_ROLES.has(data.user.role as StaffRole)) {
+      // clear message). tokenToUser returns null for any non-staff role.
+      if (!decoded) {
         throw new CustomerAccountRejected();
       }
 
-      await applyTokens(data.accessToken, data.refreshToken, {
-        firstName: data.user.firstName,
-        lastName: data.user.lastName,
-      });
+      await applyTokens(data.accessToken, data.refreshToken);
     },
     [applyTokens],
   );
