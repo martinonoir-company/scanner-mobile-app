@@ -46,6 +46,8 @@ export default function ReturnsBatchScreen() {
     orderId?: string;
     orderNumber?: string;
     channel?: 'STOREFRONT' | 'MOBILE' | 'POS' | 'ADMIN';
+    /** Order grand total (minor units), used as the cap on custom refunds. */
+    orderTotal?: string;
   }>();
   const { selected } = useBranch();
   const batch = useBatchScan();
@@ -53,6 +55,25 @@ export default function ReturnsBatchScreen() {
   const [reasonPickerFor, setReasonPickerFor] = useState<PendingLine | null>(
     null,
   );
+
+  // variantId → original unitPrice (minor units) from the order. We need
+  // this to suggest a refund total on the next screen; trusting variant
+  // current retail price would be wrong if the customer paid an older
+  // amount or had a discount applied.
+  const [orderPriceByVariant, setOrderPriceByVariant] = useState<
+    Record<string, number>
+  >({});
+  useEffect(() => {
+    if (!params.orderNumber) return;
+    void api
+      .lookupOrderForReturn(String(params.orderNumber))
+      .then((res) => {
+        const map: Record<string, number> = {};
+        for (const i of res.data.items) map[i.variantId] = i.unitPrice;
+        setOrderPriceByVariant(map);
+      })
+      .catch(() => { /* user will still be able to scan + submit */ });
+  }, [params.orderNumber]);
   const [noteDraft, setNoteDraft] = useState('');
 
   // Without an order we don't know how to refund — bounce back to step 1.
@@ -172,12 +193,21 @@ export default function ReturnsBatchScreen() {
     // POS-channel → ask "cash or bank transfer?". Storefront / Mobile →
     // server defaults to Paystack-refund on the original payment.
     if (params.channel === 'POS') {
+      // Pre-compute the line-total default so the cashier sees the right
+      // number on the next screen; they can still override (e.g. include
+      // shipping or do a partial refund).
+      const linesDefault = refundLines.reduce((sum, l) => {
+        const unit = orderPriceByVariant[l.variant.id] ?? 0;
+        return sum + unit * l.quantity;
+      }, 0);
       router.push({
         pathname: '/returns/refund-method',
         params: {
           orderId: String(params.orderId),
           orderNumber: String(params.orderNumber),
           payload: JSON.stringify(refundPayload),
+          defaultAmount: String(linesDefault),
+          orderTotal: String(params.orderTotal ?? linesDefault),
         },
       });
       return;

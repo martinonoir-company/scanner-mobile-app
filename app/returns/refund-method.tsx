@@ -1,9 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  ActivityIndicator,
   Alert,
+  FlatList,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -16,20 +17,19 @@ import { Button } from '@/components/Button';
 import { api } from '@/lib/api';
 import { ApiError } from '@/lib/api-types';
 import { useBranch } from '@/lib/branch-context';
+import { formatMinor } from '@/lib/format';
 import { colors, radius, spacing, text } from '@/theme';
 
 /**
- * Step 3 for POS-channel returns: how is the customer being paid back?
+ * Step 3 for POS returns: how is the customer being paid back?
  *
  *  - CASH       → refund out of the till, no super-admin step
  *  - TRANSFER   → capture + verify bank details at the till, then queue
  *                 a Paystack-transfer refund request for the super admin
  *
- * For storefront / mobile orders this screen is skipped entirely — the
- * Paystack-refund path runs straight from the batch screen.
- *
- * The serialised batch is passed via search params so this screen is
- * stateless; on success the parent stack pops to home.
+ * The cashier can override the refund amount (partial refund, or to
+ * deduct shipping). When the previous screen skipped item scanning,
+ * a default of zero forces the cashier to type the amount explicitly.
  */
 
 interface BatchLineParam {
@@ -46,36 +46,91 @@ export default function RefundMethodScreen() {
     orderId: string;
     orderNumber: string;
     payload: string;
+    /** Pre-computed refund total in minor units (from line items). */
+    defaultAmount?: string;
+    /** Order grand total in minor units — cap on the refund amount. */
+    orderTotal?: string;
+    /** "1" when the user picked Skip Items on the previous screen. */
+    skippedScan?: string;
     reason?: string;
   }>();
   const { selected } = useBranch();
 
   const [method, setMethod] = useState<'CASH' | 'TRANSFER' | null>(null);
+
+  // Bank picker (modal with search).
   const [banks, setBanks] = useState<Array<{ name: string; code: string }>>([]);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [bankFilter, setBankFilter] = useState('');
   const [bankCode, setBankCode] = useState('');
+  const [bankName, setBankName] = useState('');
+
   const [accountNumber, setAccountNumber] = useState('');
   const [verifying, setVerifying] = useState(false);
   const [verifiedName, setVerifiedName] = useState<string | null>(null);
   const [verifyError, setVerifyError] = useState<string | null>(null);
+
+  // Custom-amount entry. We always present this so the cashier can adjust
+  // for shipping etc. The default is the sum of returned-line totals.
+  const defaultAmount = useMemo(() => {
+    const n = Number(params.defaultAmount ?? 0);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  }, [params.defaultAmount]);
+  const orderTotal = useMemo(() => {
+    const n = Number(params.orderTotal ?? 0);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  }, [params.orderTotal]);
+  const skippedScan = params.skippedScan === '1';
+
+  // The cashier types whole naira; we store as minor units (kobo).
+  const [amountInput, setAmountInput] = useState<string>(
+    defaultAmount > 0 ? String(defaultAmount / 100) : '',
+  );
+
+  const amountMinor = useMemo(() => {
+    const n = parseFloat(amountInput.replace(/,/g, ''));
+    if (!Number.isFinite(n) || n <= 0) return 0;
+    return Math.round(n * 100);
+  }, [amountInput]);
+
   const [submitting, setSubmitting] = useState(false);
 
-  const lines: BatchLineParam[] = (() => {
+  const lines: BatchLineParam[] = useMemo(() => {
     try {
       return JSON.parse(String(params.payload ?? '[]')) as BatchLineParam[];
     } catch {
       return [];
     }
-  })();
+  }, [params.payload]);
 
+  // Dedupe banks by code — Paystack returns multiple entries for some
+  // banks (commercial + USSD + digital) sharing a code. That triggered
+  // React's duplicate-key warning and rendered the screen unusable.
   useEffect(() => {
-    void api.listBanks().then((res) => setBanks(res.data));
+    void api.listBanks().then((res) => {
+      const seen = new Set<string>();
+      const unique = res.data
+        .filter((b) => {
+          if (!b.code || seen.has(b.code)) return false;
+          seen.add(b.code);
+          return true;
+        })
+        .sort((a, b) => a.name.localeCompare(b.name));
+      setBanks(unique);
+    });
   }, []);
 
-  // Account verification — only enable Submit once the account name comes
-  // back from Paystack and matches what the cashier expects. Bank code +
-  // a 10-digit account number is the minimum input.
+  const filteredBanks = useMemo(() => {
+    const q = bankFilter.trim().toLowerCase();
+    if (!q) return banks;
+    return banks.filter(
+      (b) =>
+        b.name.toLowerCase().includes(q) || b.code.toLowerCase().includes(q),
+    );
+  }, [banks, bankFilter]);
+
   const canVerify =
-    bankCode.length > 0 && accountNumber.replace(/\D/g, '').length >= 10;
+    !!bankCode && accountNumber.replace(/\D/g, '').length >= 10;
 
   const verifyAccount = useCallback(async () => {
     if (!canVerify) return;
@@ -104,12 +159,24 @@ export default function RefundMethodScreen() {
     }
   }, [canVerify, accountNumber, bankCode]);
 
+  const amountValid =
+    amountMinor > 0 && (orderTotal === 0 || amountMinor <= orderTotal);
+
   const submit = useCallback(async () => {
     if (!method || submitting) return;
+    if (!amountValid) {
+      Alert.alert(
+        'Check the amount',
+        orderTotal > 0 && amountMinor > orderTotal
+          ? `Refund cannot exceed ${formatMinor(orderTotal)} — the order total.`
+          : 'Enter the amount to refund.',
+      );
+      return;
+    }
     if (method === 'TRANSFER' && !verifiedName) {
       Alert.alert(
         'Verify account first',
-        'Tap "Verify account" and confirm the account name with the customer before submitting.',
+        'Tap "Verify account" and confirm the name with the customer before submitting.',
       );
       return;
     }
@@ -121,21 +188,20 @@ export default function RefundMethodScreen() {
         warehouseCode: selected?.warehouseCode,
         reason: params.reason ? String(params.reason) : undefined,
         posCashRefund: method === 'CASH',
+        // Always send a customAmount — server treats it as the
+        // authoritative figure when present.
+        customAmount: amountMinor,
         bankDetails:
           method === 'TRANSFER' && verifiedName
-            ? {
-                bankCode,
-                accountNumber: accountNumber.trim(),
-                accountName: verifiedName,
-              }
+            ? { bankCode, accountNumber: accountNumber.trim(), accountName: verifiedName }
             : undefined,
       });
       const out = res.data;
       Alert.alert(
         method === 'CASH' ? 'Cash refund recorded' : 'Refund request sent',
         method === 'CASH'
-          ? `Pay the customer ₦${(out.amount / 100).toLocaleString()} from the till.`
-          : `The super admin will process ₦${(out.amount / 100).toLocaleString()} to ${verifiedName}.`,
+          ? `Pay the customer ${formatMinor(out.amount)} from the till.`
+          : `The super admin will process ${formatMinor(out.amount)} to ${verifiedName}.`,
         [{ text: 'Done', onPress: () => router.replace('/(home)') }],
       );
     } catch (err) {
@@ -152,6 +218,9 @@ export default function RefundMethodScreen() {
   }, [
     method,
     submitting,
+    amountValid,
+    amountMinor,
+    orderTotal,
     verifiedName,
     params.orderId,
     params.reason,
@@ -163,10 +232,41 @@ export default function RefundMethodScreen() {
 
   return (
     <SafeAreaView style={styles.root} edges={['bottom']}>
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+      >
         <Text style={styles.title}>How is the customer being paid back?</Text>
-        <Text style={styles.subtitle}>Order #{params.orderNumber}</Text>
+        <Text style={styles.subtitle}>
+          Order #{params.orderNumber}
+          {skippedScan ? ' · items not scanned' : ''}
+        </Text>
 
+        {/* Amount field */}
+        <View style={styles.amountBlock}>
+          <Text style={styles.fieldLabel}>Refund amount (₦)</Text>
+          <TextInput
+            value={amountInput}
+            onChangeText={setAmountInput}
+            placeholder={
+              defaultAmount > 0
+                ? String(defaultAmount / 100)
+                : 'e.g. 12000'
+            }
+            placeholderTextColor={colors.ink[300]}
+            keyboardType="decimal-pad"
+            style={styles.amountInput}
+          />
+          <Text style={styles.fieldHint}>
+            {defaultAmount > 0 && amountMinor !== defaultAmount
+              ? `Default was ${formatMinor(defaultAmount)} — adjust if shipping should be excluded or only a partial refund applies.`
+              : orderTotal > 0
+                ? `Cannot exceed ${formatMinor(orderTotal)} (order total).`
+                : 'Enter the amount to refund the customer.'}
+          </Text>
+        </View>
+
+        {/* Method options */}
         <Pressable
           onPress={() => setMethod('CASH')}
           style={[styles.option, method === 'CASH' && styles.optionActive]}
@@ -202,36 +302,21 @@ export default function RefundMethodScreen() {
         {method === 'TRANSFER' && (
           <View style={styles.transferForm}>
             <Text style={styles.fieldLabel}>Bank</Text>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.bankList}
+            <Pressable
+              onPress={() => setPickerOpen(true)}
+              style={styles.bankPicker}
             >
-              {banks.map((b) => (
-                <Pressable
-                  key={b.code}
-                  onPress={() => {
-                    setBankCode(b.code);
-                    setVerifiedName(null);
-                    setVerifyError(null);
-                  }}
-                  style={[
-                    styles.bankChip,
-                    bankCode === b.code && styles.bankChipActive,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.bankChipText,
-                      bankCode === b.code && styles.bankChipTextActive,
-                    ]}
-                    numberOfLines={1}
-                  >
-                    {b.name}
-                  </Text>
-                </Pressable>
-              ))}
-            </ScrollView>
+              <Text
+                style={[
+                  styles.bankPickerText,
+                  !bankName && styles.bankPickerPlaceholder,
+                ]}
+                numberOfLines={1}
+              >
+                {bankName || 'Tap to pick the customer’s bank'}
+              </Text>
+              <Ionicons name="chevron-down" size={16} color={colors.ink[400]} />
+            </Pressable>
 
             <Text style={styles.fieldLabel}>Account number</Text>
             <TextInput
@@ -277,16 +362,19 @@ export default function RefundMethodScreen() {
         <View style={styles.actions}>
           <Button
             title={
-              method === 'CASH'
-                ? 'Record cash refund'
-                : method === 'TRANSFER'
-                  ? 'Send to super admin'
-                  : 'Pick a method'
+              !method
+                ? 'Pick a method'
+                : !amountValid
+                  ? 'Enter a valid amount'
+                  : method === 'CASH'
+                    ? `Record ${formatMinor(amountMinor)} cash refund`
+                    : `Send ${formatMinor(amountMinor)} to super admin`
             }
             size="lg"
             fullWidth
             disabled={
               !method ||
+              !amountValid ||
               submitting ||
               (method === 'TRANSFER' && !verifiedName)
             }
@@ -302,6 +390,64 @@ export default function RefundMethodScreen() {
           />
         </View>
       </ScrollView>
+
+      {/* Bank picker modal */}
+      <Modal
+        visible={pickerOpen}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setPickerOpen(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Pick a bank</Text>
+              <Pressable onPress={() => setPickerOpen(false)} hitSlop={8}>
+                <Ionicons name="close" size={20} color={colors.ink[500]} />
+              </Pressable>
+            </View>
+            <TextInput
+              value={bankFilter}
+              onChangeText={setBankFilter}
+              placeholder="Search…"
+              placeholderTextColor={colors.ink[300]}
+              autoCorrect={false}
+              autoCapitalize="none"
+              style={styles.searchInput}
+            />
+            <FlatList
+              data={filteredBanks}
+              keyExtractor={(b) => b.code}
+              keyboardShouldPersistTaps="handled"
+              style={{ maxHeight: 360 }}
+              renderItem={({ item }) => {
+                const active = item.code === bankCode;
+                return (
+                  <Pressable
+                    onPress={() => {
+                      setBankCode(item.code);
+                      setBankName(item.name);
+                      setVerifiedName(null);
+                      setVerifyError(null);
+                      setPickerOpen(false);
+                      setBankFilter('');
+                    }}
+                    style={[styles.bankRow, active && styles.bankRowActive]}
+                  >
+                    <Text style={styles.bankRowText} numberOfLines={1}>
+                      {item.name}
+                    </Text>
+                    <Text style={styles.bankRowCode}>{item.code}</Text>
+                  </Pressable>
+                );
+              }}
+              ListEmptyComponent={
+                <Text style={styles.emptyText}>No banks match “{bankFilter}”.</Text>
+              }
+            />
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -317,6 +463,20 @@ const styles = StyleSheet.create({
   content: { padding: spacing[4], gap: spacing[3] },
   title: { ...text.lg, fontWeight: '700', color: colors.ink[900] },
   subtitle: { ...text.sm, color: colors.ink[500] },
+
+  amountBlock: { gap: spacing[1] },
+  amountInput: {
+    borderWidth: 1,
+    borderColor: colors.ink[100],
+    borderRadius: radius.lg,
+    paddingHorizontal: spacing[4],
+    paddingVertical: 14,
+    backgroundColor: colors.surface[1],
+    color: colors.ink[900],
+    fontSize: 20,
+    fontWeight: '700',
+  },
+  fieldHint: { ...text.xs, color: colors.ink[500] },
 
   option: {
     flexDirection: 'row',
@@ -337,21 +497,20 @@ const styles = StyleSheet.create({
 
   transferForm: { gap: spacing[2] },
   fieldLabel: { ...text.xs, color: colors.ink[500], fontWeight: '600' },
-  bankList: { gap: spacing[2], paddingVertical: 4 },
-  bankChip: {
-    paddingHorizontal: spacing[3],
-    paddingVertical: spacing[2],
+
+  bankPicker: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
     borderWidth: 1,
     borderColor: colors.ink[100],
-    borderRadius: radius.full,
+    borderRadius: radius.lg,
+    paddingHorizontal: spacing[4],
+    paddingVertical: 12,
     backgroundColor: colors.surface[1],
   },
-  bankChipActive: {
-    borderColor: colors.ink[900],
-    backgroundColor: colors.ink[900],
-  },
-  bankChipText: { ...text.xs, color: colors.ink[700], fontWeight: '600' },
-  bankChipTextActive: { color: '#fff' },
+  bankPickerText: { ...text.base, color: colors.ink[900], flex: 1 },
+  bankPickerPlaceholder: { color: colors.ink[400] },
 
   input: {
     borderWidth: 1,
@@ -384,4 +543,47 @@ const styles = StyleSheet.create({
   verifiedText: { ...text.sm, color: colors.ink[800], flexShrink: 1 },
 
   actions: { gap: spacing[2], marginTop: spacing[3] },
+
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'flex-end',
+  },
+  modalCard: {
+    backgroundColor: colors.surface[0],
+    borderTopLeftRadius: radius['2xl'],
+    borderTopRightRadius: radius['2xl'],
+    padding: spacing[4],
+    gap: spacing[3],
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  modalTitle: { ...text.lg, fontWeight: '700', color: colors.ink[900] },
+  searchInput: {
+    borderWidth: 1,
+    borderColor: colors.ink[100],
+    borderRadius: radius.lg,
+    paddingHorizontal: spacing[4],
+    paddingVertical: 10,
+    backgroundColor: colors.surface[1],
+    color: colors.ink[900],
+    ...text.base,
+  },
+  bankRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing[3],
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.ink[100],
+    gap: spacing[2],
+  },
+  bankRowActive: { backgroundColor: colors.surface[1] },
+  bankRowText: { ...text.base, color: colors.ink[900], flex: 1 },
+  bankRowCode: { ...text.xs, color: colors.ink[400], fontVariant: ['tabular-nums'] },
+  emptyText: { ...text.sm, color: colors.ink[500], textAlign: 'center', paddingVertical: spacing[4] },
 });

@@ -323,6 +323,8 @@ class ApiClient {
       accountNumber: string;
       accountName: string;
     };
+    /** Custom refund total in minor units. Required when lines is empty. */
+    customAmount?: number;
   }) {
     return this.request<{
       data: {
