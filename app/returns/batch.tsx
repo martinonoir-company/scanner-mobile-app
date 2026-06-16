@@ -58,7 +58,7 @@ export default function ReturnsBatchScreen() {
   // Without an order we don't know how to refund — bounce back to step 1.
   useEffect(() => {
     if (!params.orderId) {
-      router.replace('/returns/index');
+      router.replace('/returns' as never);
     }
   }, [params.orderId]);
 
