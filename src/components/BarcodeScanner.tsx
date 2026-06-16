@@ -1,9 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Keyboard,
   Linking,
   StyleSheet,
   Text,
+  TextInput,
+  TouchableOpacity,
   View,
 } from 'react-native';
 import {
@@ -46,12 +49,27 @@ interface Props {
   active?: boolean;
   /** Helper text rendered below the scan box. */
   hint?: string;
+  /**
+   * Show the built-in "Enter code manually" fallback (default true).
+   * Set false on a screen that renders its own manual-entry UI, so it
+   * isn't duplicated.
+   */
+  showManualEntry?: boolean;
 }
 
-export function BarcodeScanner({ onScan, active = true, hint }: Props) {
+export function BarcodeScanner({
+  onScan,
+  active = true,
+  hint,
+  showManualEntry = true,
+}: Props) {
   const [permission, requestPermission] = useCameraPermissions();
   const [torchOn, setTorchOn] = useState(false);
   const [flashFeedback, setFlashFeedback] = useState(false);
+  // Manual entry: a fallback for when the camera misreads a barcode. The
+  // staff can type the raw code; it runs the exact same onScan path.
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manualCode, setManualCode] = useState('');
 
   // Tracks the last scanned value + when, for debouncing identical scans.
   const lastScanRef = useRef<{ data: string; at: number } | null>(null);
@@ -88,6 +106,22 @@ export function BarcodeScanner({ onScan, active = true, hint }: Props) {
     },
     [active, onScan],
   );
+
+  // Submit a manually typed code. Routes through the SAME onScan callback
+  // as a camera scan, so every downstream action is identical. Bypasses
+  // the camera debounce (a deliberate keystroke is never an accidental
+  // repeat), but still respects `active` so it can't fire mid-processing.
+  const submitManualCode = useCallback(() => {
+    if (!active) return;
+    const code = manualCode.trim();
+    if (!code) return;
+    Keyboard.dismiss();
+    setManualCode('');
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(
+      () => {},
+    );
+    onScan(code, 'manual');
+  }, [active, manualCode, onScan]);
 
   const openSettings = useCallback(() => {
     Linking.openSettings().catch(() => {});
@@ -204,6 +238,60 @@ export function BarcodeScanner({ onScan, active = true, hint }: Props) {
           }
         />
       </View>
+
+      {/* Manual entry — fallback for a misreading camera. Anchored to the
+          bottom; collapsed to a single tappable row until opened. A screen
+          with its own manual-entry UI passes showManualEntry={false}. */}
+      {showManualEntry ? (
+      <View style={styles.manualWrap}>
+        {manualOpen ? (
+          <View style={styles.manualPanel}>
+            <View style={styles.manualHeaderRow}>
+              <Text style={styles.manualTitle}>Enter code manually</Text>
+              <TouchableOpacity
+                onPress={() => {
+                  setManualOpen(false);
+                  setManualCode('');
+                  Keyboard.dismiss();
+                }}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name="close" size={20} color={colors.ink[500]} />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.manualInputRow}>
+              <TextInput
+                style={styles.manualInput}
+                value={manualCode}
+                onChangeText={setManualCode}
+                placeholder="Barcode or SKU"
+                placeholderTextColor={colors.ink[400]}
+                autoCapitalize="characters"
+                autoCorrect={false}
+                returnKeyType="done"
+                onSubmitEditing={submitManualCode}
+                editable={active}
+              />
+              <Button
+                title="Submit"
+                size="md"
+                onPress={submitManualCode}
+                disabled={!active || manualCode.trim().length === 0}
+              />
+            </View>
+          </View>
+        ) : (
+          <TouchableOpacity
+            style={styles.manualToggle}
+            onPress={() => setManualOpen(true)}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="keypad-outline" size={16} color="#fff" />
+            <Text style={styles.manualToggleText}>Enter code manually</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+      ) : null}
     </View>
   );
 }
@@ -328,5 +416,60 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: spacing[4],
     bottom: spacing[6],
+  },
+
+  // Manual entry — anchored bottom-left so it never collides with the
+  // torch button on the bottom-right.
+  manualWrap: {
+    position: 'absolute',
+    left: spacing[4],
+    bottom: spacing[6],
+  },
+  manualToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.25)',
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[2],
+    borderRadius: radius.full,
+  },
+  manualToggleText: { ...text.sm, color: '#fff', fontWeight: '600' },
+  manualPanel: {
+    // Span almost the full width when open so the input is comfortable.
+    width: 300,
+    maxWidth: '100%',
+    backgroundColor: colors.surface[0],
+    borderRadius: radius.lg,
+    padding: spacing[3],
+    gap: spacing[2],
+  },
+  manualHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  manualTitle: {
+    ...text.sm,
+    fontWeight: '700',
+    color: colors.ink[900],
+  },
+  manualInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+  },
+  manualInput: {
+    flex: 1,
+    ...text.base,
+    color: colors.ink[900],
+    backgroundColor: colors.surface[1],
+    borderWidth: 1,
+    borderColor: colors.ink[200],
+    borderRadius: radius.md,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2],
   },
 });

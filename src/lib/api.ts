@@ -252,6 +252,93 @@ class ApiClient {
     );
   }
 
+  // ── Refunds (returns with refund-request creation) ──
+
+  /**
+   * Resolve an order by its order number for the "Which order?" screen
+   * at the start of the returns flow. The cashier scans / types the
+   * order number from the receipt; this returns the items so we can
+   * match each scanned variant against the original sale.
+   */
+  async lookupOrderForReturn(orderNumber: string) {
+    return this.request<{
+      data: {
+        id: string;
+        orderNumber: string;
+        channel: 'STOREFRONT' | 'MOBILE' | 'POS' | 'ADMIN';
+        status: string;
+        grandTotal: number;
+        currency: string;
+        customerName?: string | null;
+        customerPhone?: string | null;
+        paidAt?: string | null;
+        items: Array<{
+          id: string;
+          variantId: string;
+          productName: string;
+          variantName?: string;
+          sku: string;
+          quantity: number;
+          unitPrice: number;
+        }>;
+      };
+    }>(`/refunds/order-lookup/${encodeURIComponent(orderNumber)}`);
+  }
+
+  async listBanks() {
+    return this.request<{ data: Array<{ name: string; code: string }> }>(
+      '/refunds/banks',
+    );
+  }
+
+  async verifyBankAccount(input: { accountNumber: string; bankCode: string }) {
+    return this.request<{
+      data: { ok: true; accountName: string } | { ok: false; error: string };
+    }>('/refunds/verify-bank-account', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  }
+
+  /**
+   * Submit a return-with-refund. Server writes the RETURN stock movements
+   * AND a refund_request row in one transaction. The shape mirrors the
+   * batch endpoint so the existing batch UI is reused on the wire.
+   */
+  async submitRefundRequest(input: {
+    orderId: string;
+    lines: Array<{
+      clientLineId: string;
+      variantId: string;
+      quantity: number;
+      orderItemId?: string;
+      reasonCode?: string;
+      reasonNote?: string;
+    }>;
+    warehouseCode?: string;
+    reason?: string;
+    posCashRefund?: boolean;
+    bankDetails?: {
+      bankCode: string;
+      accountNumber: string;
+      accountName: string;
+    };
+  }) {
+    return this.request<{
+      data: {
+        id: string;
+        amount: number;
+        currency: string;
+        itemsCount: number;
+        status: string;
+        method: string;
+      };
+    }>('/refunds', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  }
+
   // ── POS sessions (checkout — item capture only) ──
   //
   // The scanner is an item-capture device: it opens a session, adds/edits

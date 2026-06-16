@@ -155,7 +155,7 @@ export default function HomeScreen() {
             description="Damaged or returned items"
             icon="arrow-undo"
             variant="secondary"
-            onPress={() => router.push('/returns/batch')}
+            onPress={() => router.push('/returns/index')}
           />
           <ActionCard
             title="Dispatch"

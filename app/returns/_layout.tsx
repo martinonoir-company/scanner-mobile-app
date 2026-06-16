@@ -25,7 +25,12 @@ export default function ReturnsLayout() {
         contentStyle: { backgroundColor: colors.surface[0] },
       }}
     >
+      <Stack.Screen name="index" options={{ title: 'Returns — find order' }} />
       <Stack.Screen name="batch" options={{ title: 'Returns & damages' }} />
+      <Stack.Screen
+        name="refund-method"
+        options={{ title: 'How to refund?', presentation: 'modal' }}
+      />
     </Stack>
   );
 }

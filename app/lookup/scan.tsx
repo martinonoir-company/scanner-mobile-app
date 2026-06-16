@@ -104,6 +104,8 @@ export default function LookupScreen() {
           onScan={handleScan}
           active={scannerActive}
           hint="Point the camera at a product barcode"
+          // This screen renders its own manual-entry row in the sheet below.
+          showManualEntry={false}
         />
       </View>
 

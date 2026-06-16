@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import {
   Alert,
@@ -16,7 +16,7 @@ import { BarcodeScanner } from '@/components/BarcodeScanner';
 import { BatchPanel } from '@/components/BatchPanel';
 import { Button } from '@/components/Button';
 import { api } from '@/lib/api';
-import { ApiError, MovementBatchLine } from '@/lib/api-types';
+import { ApiError } from '@/lib/api-types';
 import { useBranch } from '@/lib/branch-context';
 import { PendingLine, useBatchScan } from '@/lib/use-batch-scan';
 import {
@@ -27,21 +27,43 @@ import {
 } from '@/lib/return-reasons';
 import { colors, radius, spacing, text } from '@/theme';
 
+/**
+ * Step 2 of the returns flow: scan the items coming back.
+ *
+ * Reads orderId/orderNumber/channel from the route params (set by
+ * /returns/index). Every scanned line must match a variant on the order
+ * — otherwise the line is rejected. On submit:
+ *   - STOREFRONT / MOBILE → server creates a Paystack-refund request
+ *     (super admin approves; refund hits the original card)
+ *   - POS                 → routes through /returns/refund-method so the
+ *     cashier picks cash or bank transfer
+ *
+ * Damage write-offs are unchanged from before: ADJUSTMENT movements that
+ * don't generate a refund row (write-off, not customer-paid-back).
+ */
 export default function ReturnsBatchScreen() {
+  const params = useLocalSearchParams<{
+    orderId?: string;
+    orderNumber?: string;
+    channel?: 'STOREFRONT' | 'MOBILE' | 'POS' | 'ADMIN';
+  }>();
   const { selected } = useBranch();
   const batch = useBatchScan();
   const [submitting, setSubmitting] = useState(false);
-  // The line currently having its reason edited (or null when the picker
-  // is closed).
   const [reasonPickerFor, setReasonPickerFor] = useState<PendingLine | null>(
     null,
   );
   const [noteDraft, setNoteDraft] = useState('');
 
+  // Without an order we don't know how to refund — bounce back to step 1.
+  useEffect(() => {
+    if (!params.orderId) {
+      router.replace('/returns/index');
+    }
+  }, [params.orderId]);
+
   const scannerActive = !submitting && !batch.resolving && !reasonPickerFor;
 
-  // Ensure every freshly scanned line carries a default reason. useBatchScan
-  // adds lines with no reason; the returns flow needs one on every line.
   useEffect(() => {
     for (const line of batch.lines) {
       if (!line.reason) {
@@ -75,7 +97,6 @@ export default function ReturnsBatchScreen() {
   const submit = useCallback(async () => {
     if (batch.lines.length === 0 || submitting) return;
 
-    // Validation: any "Other" line must have a note.
     const missingNote = batch.lines.find((l) => {
       const r = findReturnReason(l.reason ?? DEFAULT_RETURN_REASON_ID);
       return r?.requiresNote && !l.note?.trim();
@@ -88,72 +109,127 @@ export default function ReturnsBatchScreen() {
       return;
     }
 
-    setSubmitting(true);
-    const lines: MovementBatchLine[] = batch.lines.map((l) => {
-      const r =
-        findReturnReason(l.reason ?? DEFAULT_RETURN_REASON_ID) ??
-        RETURN_REASONS[0]!;
-      const reasonText = l.note?.trim()
-        ? `${r.label} — ${l.note.trim()}`
-        : r.label;
-      return {
-        clientLineId: l.clientLineId,
-        variantId: l.variant.id,
-        kind: r.kind, // RETURN (back to stock) or ADJUSTMENT (write-off)
-        quantity: l.quantity,
-        warehouseCode: selected?.warehouseCode,
-        referenceType: r.kind === 'ADJUSTMENT' ? 'DAMAGE' : 'CUSTOMER_RETURN',
-        reason: `${reasonText} (scanner)`,
-      };
-    });
+    // Split lines: RETURN-kind lines drive the refund flow; ADJUSTMENT
+    // lines are damage write-offs and still go through the existing
+    // movements-batch endpoint (no refund row).
+    const refundLines = batch.lines.filter(
+      (l) =>
+        findReturnReason(l.reason ?? DEFAULT_RETURN_REASON_ID)?.kind ===
+        'RETURN',
+    );
+    const writeOffLines = batch.lines.filter(
+      (l) =>
+        findReturnReason(l.reason ?? DEFAULT_RETURN_REASON_ID)?.kind ===
+        'ADJUSTMENT',
+    );
 
+    if (refundLines.length === 0) {
+      // Pure write-off — route through the legacy movements path.
+      setSubmitting(true);
+      try {
+        await api.recordMovementsBatch(
+          writeOffLines.map((l) => ({
+            clientLineId: l.clientLineId,
+            variantId: l.variant.id,
+            kind: 'ADJUSTMENT',
+            quantity: l.quantity,
+            warehouseCode: selected?.warehouseCode,
+            referenceType: 'DAMAGE',
+            reason: lineReasonText(l),
+          })),
+        );
+        batch.reset();
+        Alert.alert(
+          'Write-offs recorded',
+          `${writeOffLines.length} item${writeOffLines.length === 1 ? '' : 's'} marked as damaged.`,
+          [{ text: 'Done', onPress: () => router.replace('/(home)') }],
+        );
+      } catch (err) {
+        const e = err as Partial<ApiError>;
+        Alert.alert(
+          'Could not record write-offs',
+          Array.isArray(e.message)
+            ? e.message[0] ?? 'Server error'
+            : (e.message as string | undefined) ?? 'Server error',
+        );
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
+
+    // Build the refund payload — same per-line shape the server expects.
+    const refundPayload = refundLines.map((l) => ({
+      clientLineId: l.clientLineId,
+      variantId: l.variant.id,
+      quantity: l.quantity,
+      reasonCode:
+        findReturnReason(l.reason ?? DEFAULT_RETURN_REASON_ID)?.id ??
+        DEFAULT_RETURN_REASON_ID,
+      reasonNote: l.note?.trim() || undefined,
+    }));
+
+    // POS-channel → ask "cash or bank transfer?". Storefront / Mobile →
+    // server defaults to Paystack-refund on the original payment.
+    if (params.channel === 'POS') {
+      router.push({
+        pathname: '/returns/refund-method',
+        params: {
+          orderId: String(params.orderId),
+          orderNumber: String(params.orderNumber),
+          payload: JSON.stringify(refundPayload),
+        },
+      });
+      return;
+    }
+
+    setSubmitting(true);
     try {
-      const res = await api.recordMovementsBatch(lines);
-      const { accepted, deduplicated } = res.data;
-      const totalUnits = batch.lines.reduce((s, l) => s + l.quantity, 0);
-      const writeOffs = batch.lines.filter(
-        (l) =>
-          findReturnReason(l.reason ?? DEFAULT_RETURN_REASON_ID)?.kind ===
-          'ADJUSTMENT',
-      ).length;
+      const res = await api.submitRefundRequest({
+        orderId: String(params.orderId),
+        lines: refundPayload,
+        warehouseCode: selected?.warehouseCode,
+      });
+      const out = res.data;
+      // Any damage write-offs go in their own batch — they bypass refund.
+      if (writeOffLines.length > 0) {
+        await api.recordMovementsBatch(
+          writeOffLines.map((l) => ({
+            clientLineId: l.clientLineId,
+            variantId: l.variant.id,
+            kind: 'ADJUSTMENT',
+            quantity: l.quantity,
+            warehouseCode: selected?.warehouseCode,
+            referenceType: 'DAMAGE',
+            reason: lineReasonText(l),
+          })),
+        );
+      }
       batch.reset();
       Alert.alert(
-        'Returns recorded',
-        [
-          `${accepted} line${accepted === 1 ? '' : 's'} recorded (${totalUnits} units).`,
-          writeOffs > 0
-            ? `${writeOffs} marked as damaged write-off${writeOffs === 1 ? '' : 's'}.`
-            : null,
-          deduplicated > 0
-            ? `${deduplicated} duplicate line${deduplicated === 1 ? '' : 's'} skipped.`
-            : null,
-        ]
-          .filter(Boolean)
-          .join('\n'),
-        [
-          { text: 'Scan more', style: 'default' },
-          { text: 'Done', style: 'cancel', onPress: () => router.back() },
-        ],
+        'Refund request sent',
+        `${(out.amount / 100).toLocaleString('en-NG', { style: 'currency', currency: 'NGN' })} sent to the super admin for processing.`,
+        [{ text: 'Done', onPress: () => router.replace('/(home)') }],
       );
     } catch (err) {
-      const apiErr = err as Partial<ApiError>;
-      const msg = Array.isArray(apiErr?.message)
-        ? apiErr.message[0] ?? 'Failed to record returns'
-        : (apiErr?.message as string | undefined) ??
-          'Failed to record returns';
-      // A 409 here means a damage write-off would drive a variant below
-      // zero — the WHOLE batch was rejected. Tell the user plainly.
-      const is409 = apiErr?.statusCode === 409;
+      const e = err as Partial<ApiError>;
       Alert.alert(
-        is409 ? 'Batch rejected' : 'Could not record returns',
-        is409
-          ? `${msg}\n\nNothing was recorded. Reduce the affected quantity or remove that line, then try again.`
-          : msg,
+        'Could not submit refund',
+        Array.isArray(e.message)
+          ? e.message[0] ?? 'Server error'
+          : (e.message as string | undefined) ?? 'Server error',
       );
     } finally {
       setSubmitting(false);
     }
-  }, [batch, submitting, selected?.warehouseCode]);
+  }, [
+    batch,
+    submitting,
+    selected?.warehouseCode,
+    params.channel,
+    params.orderId,
+    params.orderNumber,
+  ]);
 
   const confirmDiscardAndBack = useCallback(() => {
     if (batch.lines.length === 0) {
@@ -191,8 +267,6 @@ export default function ReturnsBatchScreen() {
             isWriteOff && styles.reasonChipWriteOff,
             pressed && { opacity: 0.7 },
           ]}
-          accessibilityRole="button"
-          accessibilityLabel={`Change reason for ${line.variant.productName} (current: ${r.label})`}
         >
           <Ionicons
             name={isWriteOff ? 'warning' : 'arrow-undo'}
@@ -226,7 +300,7 @@ export default function ReturnsBatchScreen() {
         <BarcodeScanner
           onScan={handleScan}
           active={scannerActive}
-          hint="Scan each returned or damaged item"
+          hint={`Scan each returned item — order #${params.orderNumber ?? ''}`}
         />
       </View>
 
@@ -236,16 +310,23 @@ export default function ReturnsBatchScreen() {
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.contextRow}>
+          <View style={styles.orderChip}>
+            <Ionicons name="receipt" size={12} color={colors.ink[700]} />
+            <Text style={styles.orderChipText} numberOfLines={1}>
+              #{params.orderNumber}
+            </Text>
+          </View>
           <View style={styles.branchChip}>
             <Ionicons name="business" size={12} color={colors.ink[700]} />
             <Text style={styles.branchChipText} numberOfLines={1}>
               {selected?.name}
             </Text>
           </View>
-          <Text style={styles.contextHint}>
-            Tap a reason chip to change why an item came back.
-          </Text>
         </View>
+        <Text style={styles.contextHint}>
+          Tap a reason chip to change why an item came back. Damage write-offs
+          do not generate a refund.
+        </Text>
 
         <BatchPanel
           lines={batch.lines}
@@ -254,7 +335,7 @@ export default function ReturnsBatchScreen() {
           onDecrement={batch.decrementLine}
           onRemove={batch.removeLine}
           renderLineExtra={renderReasonChip}
-          emptyHint="Scan a returned or damaged item to start."
+          emptyHint="Scan a returned item to start."
         />
 
         <View style={styles.actions}>
@@ -281,7 +362,7 @@ export default function ReturnsBatchScreen() {
         </View>
       </ScrollView>
 
-      {/* Reason picker modal */}
+      {/* Reason picker */}
       <Modal
         visible={!!reasonPickerFor}
         transparent
@@ -318,7 +399,6 @@ export default function ReturnsBatchScreen() {
                     key={r.id}
                     onPress={() => {
                       if (r.requiresNote) {
-                        // Keep the picker open so the note field shows.
                         if (reasonPickerFor) {
                           batch.setLineReason(
                             reasonPickerFor.clientLineId,
@@ -362,7 +442,6 @@ export default function ReturnsBatchScreen() {
               })}
             </View>
 
-            {/* Note field — only relevant when the chosen reason is "Other". */}
             {findReturnReason(
               reasonPickerFor?.reason ?? DEFAULT_RETURN_REASON_ID,
             )?.requiresNote ? (
@@ -394,12 +473,21 @@ export default function ReturnsBatchScreen() {
       <Modal visible={submitting} transparent animationType="fade">
         <View style={styles.overlay}>
           <View style={styles.overlayCard}>
-            <Text style={styles.overlayText}>Recording returns…</Text>
+            <Text style={styles.overlayText}>Submitting return…</Text>
           </View>
         </View>
       </Modal>
     </SafeAreaView>
   );
+}
+
+function lineReasonText(l: PendingLine): string {
+  const r =
+    findReturnReason(l.reason ?? DEFAULT_RETURN_REASON_ID) ??
+    RETURN_REASONS[0]!;
+  return l.note?.trim()
+    ? `${r.label} — ${l.note.trim()} (scanner)`
+    : `${r.label} (scanner)`;
 }
 
 const styles = StyleSheet.create({
@@ -412,8 +500,18 @@ const styles = StyleSheet.create({
     borderTopRightRadius: radius['2xl'],
     marginTop: -radius['2xl'],
   },
-  sheetContent: { padding: spacing[4], gap: spacing[4] },
-  contextRow: { gap: spacing[2] },
+  sheetContent: { padding: spacing[4], gap: spacing[3] },
+  contextRow: { flexDirection: 'row', gap: spacing[2], flexWrap: 'wrap' },
+  orderChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1],
+    backgroundColor: colors.surface[1],
+    borderRadius: radius.full,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[1],
+  },
+  orderChipText: { ...text.xs, color: colors.ink[700], fontWeight: '700' },
   branchChip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -422,12 +520,10 @@ const styles = StyleSheet.create({
     borderRadius: radius.full,
     paddingHorizontal: spacing[3],
     paddingVertical: spacing[1],
-    alignSelf: 'flex-start',
   },
   branchChipText: { ...text.xs, color: colors.ink[700], fontWeight: '600' },
   contextHint: { ...text.xs, color: colors.ink[400] },
 
-  // Reason chip rendered under each batch line.
   reasonChip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -451,7 +547,6 @@ const styles = StyleSheet.create({
 
   actions: { gap: spacing[2], marginTop: spacing[2] },
 
-  // Reason picker modal
   modalBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.4)',
