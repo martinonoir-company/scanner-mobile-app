@@ -17,6 +17,7 @@ import {
   ApiError,
   AuthResponse,
   Branch,
+  DispatchOrder,
   MovementBatchLine,
   MovementBatchResult,
   PosSession,
@@ -191,6 +192,38 @@ class ApiClient {
     const encoded = encodeURIComponent(code);
     return this.request<{ data: VariantLookup }>(
       `/products/variants/by-sku/${encoded}`,
+    );
+  }
+
+  // ── Dispatch ──
+
+  /** Paginated dispatch queue: shipping orders needing branch pickup. */
+  async fetchDispatchQueue(params: {
+    page?: number;
+    dispatchStatus?: string;
+    search?: string;
+  } = {}) {
+    const q = new URLSearchParams();
+    q.set('page', String(params.page ?? 1));
+    q.set('limit', '20');
+    if (params.dispatchStatus) q.set('dispatchStatus', params.dispatchStatus);
+    if (params.search?.trim()) q.set('search', params.search.trim());
+    return this.request<{
+      data: {
+        items: DispatchOrder[];
+        total: number;
+        page: number;
+        limit: number;
+        pages: number;
+      };
+    }>(`/orders/dispatch-queue?${q.toString()}`);
+  }
+
+  /** Mark an order DISPATCHED by its barcode value (order number or id). */
+  async markOrderDispatched(ref: string, note?: string) {
+    return this.request<{ data: DispatchOrder }>(
+      `/orders/dispatch-scan/${encodeURIComponent(ref)}`,
+      { method: 'POST', body: JSON.stringify({ note }) },
     );
   }
 

@@ -205,3 +205,34 @@ export interface PosSession {
   createdAt: string;
   updatedAt: string;
 }
+
+// ── Dispatch ──
+
+/** Shipping order awaiting/handed to the courier (scanner dispatch flow). */
+export interface DispatchOrder {
+  id: string;
+  orderNumber: string;
+  status: string;
+  channel: string;
+  currency: string;
+  grandTotal: number;
+  dispatchStatus?: 'PENDING' | 'DISPATCHED' | null;
+  dispatchedAt?: string | null;
+  shippingAddress?: {
+    firstName?: string;
+    lastName?: string;
+    line1?: string;
+    line2?: string;
+    city?: string;
+    state?: string;
+    phone?: string;
+  } | null;
+  items: {
+    id: string;
+    productName: string;
+    variantName?: string;
+    sku: string;
+    quantity: number;
+  }[];
+  createdAt: string;
+}

@@ -59,14 +59,6 @@ export default function HomeScreen() {
     ]);
   };
 
-  // PR #8 stub — replaced as each flow lands.
-  const notReadyYet = (flow: string) => {
-    Alert.alert(
-      `${flow} coming soon`,
-      'This flow lands in a follow-up release. Routing and UI are already wired so the team can validate now.',
-    );
-  };
-
   return (
     <Screen padded={false}>
       <ScrollView
@@ -162,7 +154,7 @@ export default function HomeScreen() {
             description="Hand off to courier"
             icon="rocket"
             variant="secondary"
-            onPress={() => notReadyYet('Dispatch')}
+            onPress={() => router.push('/dispatch' as never)}
           />
         </View>
         <View style={styles.secondaryRow}>
