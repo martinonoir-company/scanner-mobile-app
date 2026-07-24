@@ -7,9 +7,14 @@
     "icon": "./assets/expo/splash-icon.png",
     "scheme": "martinonoir-scanner",
     "userInterfaceStyle": "light",
-    "newArchEnabled": false,
-    "platforms": ["ios", "android"],
-    "assetBundlePatterns": ["**/*"],
+    "newArchEnabled": true,
+    "platforms": [
+      "ios",
+      "android"
+    ],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.martinonoir.scanner",
@@ -19,12 +24,23 @@
     },
     "android": {
       "package": "com.martinonoir.scanner",
-      "permissions": ["CAMERA"],
+      "permissions": [
+        "CAMERA",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ],
       "intentFilters": [
         {
           "action": "VIEW",
-          "category": ["DEFAULT", "BROWSABLE"],
-          "data": [{ "scheme": "martinonoir-scanner" }]
+          "category": [
+            "DEFAULT",
+            "BROWSABLE"
+          ],
+          "data": [
+            {
+              "scheme": "martinonoir-scanner"
+            }
+          ]
         }
       ]
     },
@@ -53,7 +69,11 @@
     },
     "extra": {
       "apiUrl": "https://api.martinonoir.com/api/v1",
-      "wsUrl": "wss://api.martinonoir.com/pos"
+      "wsUrl": "wss://api.martinonoir.com/pos",
+      "router": {},
+      "eas": {
+        "projectId": "4c262f87-8523-4f03-a573-fe6a0ff5e5d3"
+      }
     }
   }
 }
